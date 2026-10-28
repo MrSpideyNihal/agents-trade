@@ -1,0 +1,21 @@
+# secrets — NEVER commit
+.env
+.env.original.bak
+*.bak
+
+# python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# runtime / generated (scripmaster.json is 36MB, auto-downloaded on first run)
+logs/
+state.json
+scripmaster.json
+
+# os / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
