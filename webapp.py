@@ -68,7 +68,9 @@ _P = RISK_PROFILES.get(RISK, RISK_PROFILES["medium"])
 OTM_RANK, STOP_PCT, TARGET_PCT = _P["otm_rank"], _P["stop"], _P["target"]
 
 # ---------- shared state ----------
-_lock = threading.Lock()
+_lock = threading.Lock()           # guards _state mutations
+_api_lock = threading.Lock()       # serializes Angel API calls (engine thread + web handlers)
+_cache = {}                        # tiny TTL cache so the 5s UI poll doesn't hammer Angel
 _state = {
     "engine_running": False,
     "engine_thread": None,
@@ -79,6 +81,21 @@ _state = {
     "errors": deque(maxlen=50),
     "stop_event": threading.Event(),
 }
+
+
+def _cached(key, ttl, producer):
+    """Return producer() but reuse a value younger than `ttl` seconds. Serialized via _api_lock."""
+    now = time.time()
+    hit = _cache.get(key)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    with _api_lock:
+        hit = _cache.get(key)          # re-check: another thread may have just filled it
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        val = producer()
+        _cache[key] = (time.time(), val)
+        return val
 
 
 def _now():
@@ -101,8 +118,11 @@ def _log(kind, msg, **extra):
 # ---------- signal engine helpers (from signal_engine.py, no modification) ----------
 
 def _pick_strike(underlying, view):
-    res = suggest_fn(budget=BUDGET, underlying=underlying, view=view)
-    liq = [c for c in res["candidates"] if not c["illiquid"] and 0 < c["cost"] <= BUDGET]
+    # Cap to the broker order-value limit so auto-trade never picks a strike it can't place
+    # (fixes the trap where BUDGET > MAX_ORDER_VALUE made every auto order silently skip).
+    cap = min(BUDGET, srv.MAX_ORDER_VALUE)
+    res = suggest_fn(budget=cap, underlying=underlying, view=view)
+    liq = [c for c in res["candidates"] if not c["illiquid"] and 0 < c["cost"] <= cap]
     if not liq:
         return None
     return liq[min(OTM_RANK, len(liq) - 1)]
@@ -316,12 +336,16 @@ def _engine_loop():
             continue
 
         try:
-            nse = srv.quotes("NSE", IDX)
+            # serialize Angel calls with the web handlers so we don't trip rate limits
+            with _api_lock:
+                nse = srv.quotes("NSE", IDX)
+                held = [p for p in ((srv.api().position() or {}).get("data") or [])
+                        if int(p.get("netqty") or 0) != 0 and float(p.get("avgnetprice") or 0) > 0]
+                hq = srv.quotes("NFO", [str(p["symboltoken"]) for p in held]) if held else {}
+                _cache["positions"] = (time.time(), (held, (srv.api().rmsLimit() or {}).get("data") or {}))
+                _cache["spot"] = (time.time(), nse)
 
             # ---------- GUARDIAN: manage open positions ----------
-            held = [p for p in ((srv.api().position() or {}).get("data") or [])
-                    if int(p.get("netqty") or 0) != 0 and float(p.get("avgnetprice") or 0) > 0]
-            hq = srv.quotes("NFO", [str(p["symboltoken"]) for p in held]) if held else {}
             live_toks = {}
             for p in held:
                 tok = str(p["symboltoken"]); sym = p["tradingsymbol"]
@@ -445,7 +469,6 @@ def _env_configured():
 async def api_status(request):
     now = _now()
     with _lock:
-        sigs = list(_state["signals"])[:20]
         trades = list(_state["trades"])
     return JSONResponse({
         "time_ist": now.strftime("%H:%M:%S"),
@@ -483,9 +506,10 @@ async def api_trades(request):
 
 async def api_positions(request):
     try:
-        a = srv.api()
-        pos = (a.position() or {}).get("data") or []
-        funds = (a.rmsLimit() or {}).get("data") or {}
+        def _producer():
+            a = srv.api()
+            return ((a.position() or {}).get("data") or [], (a.rmsLimit() or {}).get("data") or {})
+        pos, funds = _cached("positions", 4, _producer)
         active = []
         total_pnl = 0
         for p in pos:
@@ -619,10 +643,10 @@ async def api_config(request):
 
 
 async def api_spot(request):
-    """Quick spot data for both indices."""
+    """Quick spot data for both indices (cached ~4s so the UI poll doesn't hammer Angel)."""
     try:
         IDX = [srv.INDEX_TOKENS["NIFTY"], srv.INDEX_TOKENS["BANKNIFTY"]]
-        nse = srv.quotes("NSE", IDX)
+        nse = _cached("spot", 4, lambda: srv.quotes("NSE", IDX))
         out = {}
         for u in ("NIFTY", "BANKNIFTY"):
             q = nse.get(srv.INDEX_TOKENS[u])
@@ -670,12 +694,20 @@ routes = [
 app = Starlette(
     debug=False,
     routes=routes,
+    # Restrict to this machine's own origin — the dashboard can start the engine,
+    # toggle auto-trade and read positions, so we don't let arbitrary sites call it.
     middleware=[
-        Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+        Middleware(CORSMiddleware,
+                   allow_origins=[f"http://localhost:{PORT}", f"http://127.0.0.1:{PORT}"],
+                   allow_methods=["GET", "POST"], allow_headers=["Content-Type"]),
     ],
 )
 
 
 if __name__ == "__main__":
-    print(f"\n  angel-trader dashboard → http://localhost:{PORT}\n")
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    # Bind to localhost only — this page has your credential setup form and trade controls;
+    # it must NOT be reachable from other devices on the network. Change deliberately if you
+    # really need LAN access, and put auth in front of it first.
+    host = os.getenv("WEBAPP_HOST", "127.0.0.1")
+    print(f"\n  angel-trader dashboard → http://127.0.0.1:{PORT}\n")
+    uvicorn.run(app, host=host, port=PORT, log_level="warning")

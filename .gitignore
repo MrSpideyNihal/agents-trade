@@ -14,8 +14,9 @@ logs/
 state.json
 scripmaster.json
 
-# os / editor
+# os / editor / tooling
 .DS_Store
 *.swp
 .idea/
 .vscode/
+.claude/

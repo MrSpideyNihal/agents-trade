@@ -6,3 +6,5 @@ requests
 logzero
 websocket-client
 tzdata
+starlette
+uvicorn
