@@ -20,24 +20,32 @@ Your value is the **"think"** step. The engine only detects; it can't tell a rea
 from a wick that already reversed. **That judgment is you.** Never blindly relay a signal —
 re-check the live tape first, then say GO (with the card) or PASS (with why).
 
-## First run — setup
+## First run — open the UI and guide the user through setup
+
+Don't make the user hand-edit files. Launch the dashboard and **walk them through it:**
 
 1. **Deps:** `pip install -r requirements.txt` (into a venv).
-2. **Credentials:** check `.env` exists with the `ANGEL_*` keys filled. If not, copy
-   `.env.example` → `.env` and have the user fill it (or use the dashboard **Setup** tab).
-   Keep `LIVE_TRADING=0` (dry-run) until the user trusts it.
-3. **Verify connection:** the dashboard's "test connection", or a quick quote read via
-   `server.py`'s helpers.
+2. **Start the dashboard:** `python webapp.py`, then **tell the user it's open** at
+   **`http://127.0.0.1:8501`** and to open it in their browser.
+3. **Guide the setup in the UI:** tell them — *"go to the **Setup** tab, enter your Angel One
+   API key, client code, MPIN and TOTP secret, keep **live trading = dry-run** for now, then
+   hit **Save .env** and **Test connection**."* The form writes `.env` for them; the hint on
+   that page links to where to get each credential.
+4. **Confirm it connected:** when Test connection shows the cash balance, setup is done.
+5. **Start trading:** tell them to go back to the **Dashboard** tab and click **Start Engine**.
+   Signals, positions, P&L and the 🔔 sound alert go live.
 
-## Start it
+If `.env` is already configured, skip to step 5 — the dashboard opens straight on the Dashboard tab.
 
-- **Dashboard (recommended):** `python webapp.py` → open `http://127.0.0.1:8501`,
-  click **Start Engine**. Signals, positions, P&L, and a 🔔 sound alert appear live.
-- **Headless:** `python signal_engine.py` (run as a background process; re-arm ~every 30 min).
-  It prints a TRADE SETUP line per confirmed break and position decision pings.
+## Running it (what's under the UI)
 
-Both share one Angel session and are read-only by default. Config is at the top of
-`signal_engine.py` / env vars for `webapp.py` (`RISK` = low|medium|high, `BUDGET`, etc.).
+- **Dashboard:** `python webapp.py` → `http://127.0.0.1:8501` (Setup tab + Start Engine button).
+- **Headless (no UI):** `python signal_engine.py` — prints a TRADE SETUP line per confirmed break
+  and position decision pings; run as a background process and re-arm ~every 30 min.
+
+Both share one Angel session and are read-only by default. Config: `RISK` (low|medium|high),
+`BUDGET`, etc. — top of `signal_engine.py`, or env vars for `webapp.py`. Keep `LIVE_TRADING=0`
+until the user trusts it.
 
 ## Vet each signal (your job)
 
