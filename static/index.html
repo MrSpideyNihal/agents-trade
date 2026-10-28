@@ -553,6 +553,7 @@
         <button class="btn stop hidden" id="btnStop" onclick="engineStop()">stop engine</button>
         <span class="engine-status" id="engineSt">idle</span>
         <div class="toggle-row">
+          <button class="btn" id="btnSound" onclick="toggleSound()" title="sound alert on signals" style="padding:6px 10px;">🔔</button>
           <label for="at">auto-trade</label>
           <label class="switch">
             <input type="checkbox" id="at" onchange="toggleAT(this.checked)">
@@ -693,6 +694,36 @@
       setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 200); }, 3500);
     }
 
+    // ── Sound alerts (Web Audio — no files, no CDN) ──
+    let soundOn = localStorage.getItem('soundOn') !== '0';   // default on
+    let lastSigKey = null;                                    // to detect new signals
+    let _audioCtx = null;
+    function playChime() {
+      if (!soundOn) return;
+      try {
+        _audioCtx = _audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const ctx = _audioCtx;
+        if (ctx.state === 'suspended') ctx.resume();
+        [880, 1174.66].forEach((f, i) => {           // A5 → D6, a clean two-note alert
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.type = 'sine'; o.frequency.value = f;
+          o.connect(g); g.connect(ctx.destination);
+          const t = ctx.currentTime + i * 0.16;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.28, t + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+          o.start(t); o.stop(t + 0.3);
+        });
+      } catch (e) {}
+    }
+    function toggleSound() {
+      soundOn = !soundOn;
+      localStorage.setItem('soundOn', soundOn ? '1' : '0');
+      document.getElementById('btnSound').textContent = soundOn ? '🔔' : '🔕';
+      toast('sound alerts ' + (soundOn ? 'on' : 'off'), 'ok');
+      if (soundOn) playChime();   // also unlocks audio (needs a user gesture)
+    }
+
     // ── API ──
     async function GET(p) { try { return await (await fetch(p)).json(); } catch(e) { return {error:e.message}; } }
     async function POST(p, b) {
@@ -769,8 +800,17 @@
       // positions
       renderPos(pos.positions || []);
 
-      // signals
-      renderLog(sig.signals || []);
+      // signals (+ chime on a new actionable one: a setup, target, stop or warning)
+      const sigList = sig.signals || [];
+      if (sigList.length) {
+        const top = sigList[0];
+        const key = (top.ts_full || '') + '|' + (top.msg || '');
+        if (lastSigKey !== null && key !== lastSigKey && ['signal','target','stop','warn'].includes(top.kind)) {
+          playChime();
+        }
+        lastSigKey = key;
+      }
+      renderLog(sigList);
 
       // history
       renderHist(tr.trades || [], tr.persisted_orders || []);
@@ -879,6 +919,7 @@
     }
 
     // ── Init ──
+    document.getElementById('btnSound').textContent = soundOn ? '🔔' : '🔕';
     poll();
     setInterval(poll, 5000);
     GET('/api/status').then(s => {
