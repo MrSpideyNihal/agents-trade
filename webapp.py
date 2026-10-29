@@ -390,7 +390,9 @@ def _engine_loop():
 
             # ---------- SENSOR: scan for confirmed break ----------
             for u in ("NIFTY", "BANKNIFTY"):
-                q = nse[srv.INDEX_TOKENS[u]]
+                q = nse.get(srv.INDEX_TOKENS[u])
+                if not q:
+                    continue  # token missing from a partial quote response — skip this cycle
                 ltp = float(q["ltp"]); hi = float(q["high"]); lo = float(q["low"]); prev = float(q["close"])
                 chg = round((ltp - prev) / prev * 100, 2)
                 hist[u].append(ltp)

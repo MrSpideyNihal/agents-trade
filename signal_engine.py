@@ -134,7 +134,9 @@ while True:
             emit(f"⚪ CLOSED {pstate[tok].get('sym', tok)} — now flat, confirm result."); del pstate[tok]
         # ---------- SENSOR: scan for a confirmed break ----------
         for u in ("NIFTY", "BANKNIFTY"):
-            q = nse[m.INDEX_TOKENS[u]]
+            q = nse.get(m.INDEX_TOKENS[u])
+            if not q:
+                continue  # token missing from a partial quote response — skip this cycle
             ltp = float(q["ltp"]); hi = float(q["high"]); lo = float(q["low"]); prev = float(q["close"])
             chg = round((ltp - prev) / prev * 100, 2); hist[u].append(ltp)
             if u not in seen_lo: seen_lo[u], seen_hi[u] = lo, hi; continue
